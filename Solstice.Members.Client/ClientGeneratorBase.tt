@@ -1,0 +1,577 @@
+﻿<#@ template debug="true" hostspecific="true" language="C#" #>
+<#@ assembly name="System.Core" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.Reflection" #>
+<#@ import namespace="Microsoft.VisualStudio.TextTemplating" #>
+<#@ import namespace="System.Runtime.CompilerServices" #>
+<#@ output extension=".cs" #>
+<#@ assembly name="$(TargetDir)\Solstice.Infrastructure.Core.dll"#>
+<#
+var serviceProvider = this.Host as ITextTemplatingEngineHost;
+
+// var solutionDir = GetMacroValue("SolutionDir");
+// var projectDir =  GetMacroValue("ProjectDir");
+// var configurationName = GetMacroValue("ConfigurationName");
+// var targetFramework = GetMacroValue("TargetFramework");
+
+var targetDir = GetMacroValue("TargetDir");
+var projectName = GetMacroValue("ProjectName");
+
+var routeRootNamespace = string.Join(".", projectName.Split('.').Take(2));
+var modelsNamespace = routeRootNamespace + ".Models";
+var typesAssemply = LoadAssembly(modelsNamespace);
+
+var codeGenerationAttribute = typeof(Solstice.CodeGenerationAttribute);
+var codeGenerationDisabledAttribute = typeof(Solstice.CodeGenerationDisabledAttribute);
+
+var namespaces = (
+	from t in typesAssemply.GetTypes()
+	where
+		t.IsPublic &&
+		t.GetCustomAttributes(codeGenerationAttribute, true).Length > 0
+	group t by t.Namespace into g
+	select new
+	{
+		Name = g.Key,
+		Types =
+			from t in g
+			orderby t.FullName
+			select t
+    }
+	)
+	.ToList();
+
+const string routeRoot = "v1/";
+
+var routeRootNamespaceHelper = routeRootNamespace + ".";
+
+#>
+using System.Net.Http;
+using Solstice.Infrastructure;
+<#
+
+foreach (var @namespace in namespaces)
+{
+#>
+
+namespace <#= @namespace.Name #>
+{
+<#
+var lastType = @namespace.Types.LastOrDefault();
+
+foreach (var type in @namespace.Types)
+{
+	var className = GetServiceClientName(type);
+#>
+	internal partial class <#= className #> : ServiceClient, <#= type.Name #>
+	{
+        public <#= className #>(HttpClient httpClient)
+            : base(httpClient)
+        {
+        }
+
+<#
+	var methods = GetPublicMethods(type).ToList();
+	var lastMethod = methods.LastOrDefault();
+
+	foreach (var method in methods)
+	{
+		var requestUri = routeRoot + GetRouteTemplate(type, routeRootNamespaceHelper) + "/" + GetMethodName(method);
+#>
+		public <#= GetMethodReturnTypeDefinition(method) #> <#= method.Name #>(<#= GetMethodParametersDefinition(method) #>)
+        {
+<# 
+			var parameters = method.GetParameters();
+			var hasParameters = parameters.Length > 0;
+
+			if (hasParameters)
+            {
+#>
+			var __parameters = new
+			{
+<#
+				foreach (var parameter in parameters)
+                {
+					var parameterName = NormalizeName(parameter.Name);
+#>
+				<#= parameterName #>,
+<#
+                }
+#>
+			};
+
+<#
+            }
+			else
+            {
+#>
+            object __parameters = null;
+
+<#
+			}
+			
+
+			var returnType = method.ReturnType;
+			var baseReturnType = returnType.BaseType;
+
+			var isTask =
+				returnType == typeof(System.Threading.Tasks.Task) ||
+				baseReturnType == typeof(System.Threading.Tasks.Task);
+
+			if (isTask)
+			{
+				var genericArguments = returnType.GetGenericArguments();
+
+				if (genericArguments.Length > 0)
+                {
+#>
+			return ExecuteAsync<<#= GetTypeDefinition(genericArguments[0]) #>>("<#= requestUri #>", parameters: __parameters);
+<#
+                }
+				else
+                {
+#>
+			return ExecuteAsync("<#= requestUri #>", parameters: __parameters);
+<#
+                }
+			}
+			else
+			{
+#>
+			throw new NotSupportedException();
+<#
+			}
+#>
+		}
+<#
+			// Leaves a new line between methods excluding the last one.
+			if (method != lastMethod)
+			{
+#>
+
+<#
+			}
+		}
+#>
+	}
+<#
+	// Leaves a new line between controllers excluding the last one.
+	if (type != lastType)
+	{
+#>
+
+<#
+	}
+}
+#>
+}
+<#
+}
+#>
+
+<#+
+private string GetMacroValue(string macroName)
+{
+	return Host.ResolveAssemblyReference("$(" + macroName + ")");
+}
+private string GetControllerName(Type type)
+{
+	return type.FullName.Replace(".", "_");
+}
+private string GetServiceClientName(Type type)
+{
+	var name = type.IsInterface && type.Name.StartsWith("I") ? type.Name.Substring(1) : type.Name;
+	return name + "ServiceClient";
+}
+
+// ############################################################
+
+private Assembly LoadAssembly(string assemblyName)
+{
+	var assemplyPath = System.IO.Path.Combine(GetMacroValue("TargetDir"), assemblyName + ".dll");
+	var assemplyBytes = System.IO.File.ReadAllBytes(assemplyPath);
+	return Assembly.Load(assemplyBytes);
+}
+
+private string GetMinimizedTypeName(Type type)
+{
+//    if (namespaces.Contains(type.Namespace))
+//    {
+//        return type.Name;
+//    }
+//    else
+    {
+		var typeFullName = type.FullName.Replace("+", ".");
+
+//		if (typeFullName.StartsWith(currentAreaNamespace))
+//        {
+//			return typeFullName.Substring(currentAreaNamespace.Length + 1);
+//        }
+//		else
+        {
+		   return typeFullName;
+        }
+    }
+}
+
+private void GetTypeDefinition(Type type, StringBuilder sb)
+{
+    if (type.IsGenericType)
+    {
+        var genericTypeDefinition = type.GetGenericTypeDefinition();
+		var name = GetMinimizedTypeName(genericTypeDefinition);
+        name = name.Remove(name.IndexOf('`'));
+        sb.Append(name).Append("<");
+        for (int i = 0; i < type.GenericTypeArguments.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(", ");
+            }
+            GetTypeDefinition(type.GenericTypeArguments[i], sb);
+        }
+        sb.Append(">");
+    }
+    else if (type.FullName == "System.Void")
+    {
+        sb.Append("void");
+    }
+    else
+    {
+        sb.Append(GetMinimizedTypeName(type));
+    }
+}
+
+private string GetTypeDefinition(Type type)
+{
+    var sbReturnType = new StringBuilder();
+    GetTypeDefinition(type, sbReturnType);
+    return sbReturnType.ToString();
+}
+
+private string GetMethodReturnTypeDefinition(MethodInfo method)
+{
+    var sbReturnType = new StringBuilder();
+    GetTypeDefinition(method.ReturnType, sbReturnType);
+    return sbReturnType.ToString();
+}
+
+private readonly HashSet<string> keywords = new HashSet<string>
+{
+	"abstract",
+	"as",
+	"base",
+	"bool",
+	"break",
+	"byte",
+	"case",
+	"catch",
+	"char",
+	"checked",
+	"class",
+	"const",
+	"continue",
+	"decimal",
+	"default",
+	"delegate",
+	"do",
+	"double",
+	"else",
+	"enum",
+	"event",
+	"explicit",
+	"extern",
+	"false",
+	"finally",
+	"fixed",
+	"float",
+	"for",
+	"foreach",
+	"goto",
+	"if",
+	"implicit",
+	"in",
+	"int",
+	"interface",
+	"internal",
+	"is",
+	"lock",
+	"long",
+	"namespace",
+	"new",
+	"null",
+	"object",
+	"operator",
+	"out",
+	"override",
+	"params",
+	"private",
+	"protected",
+	"public",
+	"readonly",
+	"ref",
+	"return",
+	"sbyte",
+	"sealed",
+	"short",
+	"sizeof",
+	"stackalloc",
+	"static",
+	"string",
+	"struct",
+	"switch",
+	"this",
+	"throw",
+	"true",
+	"try",
+	"typeof",
+	"uint",
+	"ulong",
+	"unchecked",
+	"unsafe",
+	"ushort",
+	"using",
+	"using static",
+	"virtual",
+	"void",
+	"volatile",
+	"while"
+};
+
+private string NormalizeName(string name)
+{
+	if (keywords.Contains(name))
+    {
+		return "@" + name;
+    }
+	else
+    {
+		return name;
+    }
+}
+
+private string GetMethodParametersDefinition(MethodInfo method)
+{
+    var sbParameters = new StringBuilder();
+    var parameters = method.GetParameters();
+    for (int i = 0; i < parameters.Length; i++)
+    {
+        var parameter = parameters[i];
+        if (i > 0)
+        {
+            sbParameters.Append(", ");
+        }
+        GetTypeDefinition(parameter.ParameterType, sbParameters);
+        sbParameters.Append(" ").Append(NormalizeName(parameter.Name));
+        if (parameter.HasDefaultValue)
+        {
+            sbParameters.Append(" = ");
+
+            if (parameter.DefaultValue == null || parameter.DefaultValue == System.DBNull.Value)
+            {
+                sbParameters.Append("null");
+            }
+            else if (parameter.DefaultValue is string)
+            {
+                sbParameters.Append("\"").Append(parameter.DefaultValue.ToString().Replace("\\", "\\\\").Replace("\"", "\\\"")).Append("\"");
+            }
+            else if (parameter.DefaultValue is char)
+            {
+                sbParameters.Append("'").Append(parameter.DefaultValue).Append("'");
+            }
+            else if (parameter.DefaultValue is decimal)
+            {
+                sbParameters.Append(parameter.DefaultValue).Append("M");
+            }
+            else if (parameter.DefaultValue is float)
+            {
+                sbParameters.Append(parameter.DefaultValue).Append("F");
+            }
+            else if (parameter.DefaultValue is double)
+            {
+                sbParameters.Append(parameter.DefaultValue).Append("D");
+            }
+            else if (parameter.DefaultValue is bool boolValue)
+            {
+                sbParameters.Append(boolValue ? "true" : "false");
+            }
+            else
+            {
+                sbParameters.Append(parameter.DefaultValue);
+            }
+        }
+    }
+
+    return sbParameters.ToString();
+}
+
+private string GetMethodParametersNameDefinition(MethodInfo method)
+{
+    return string.Join(", ", method.GetParameters().Select(i => NormalizeName(i.Name)));
+}
+
+private string GetRouteTemplate(Type type, string rootNamespace)
+{
+	var name = type.IsInterface && type.Name.StartsWith("I") ? type.Name.Substring(1) : type.Name;
+	var fullName = type.Namespace + (type.Namespace.Length > 0 ? "." : "") + name;
+
+	if (fullName.StartsWith(rootNamespace))
+	{
+		var startIndex = rootNamespace.Length;
+		fullName = fullName.Substring(startIndex);
+	}
+
+	if (fullName.EndsWith("BusinessLogic"))
+	{
+		var length = fullName.Length - "BusinessLogic".Length;
+		fullName = fullName.Substring(0, length);
+	}
+
+	return fullName.Replace(".", "/");;
+}
+
+private IEnumerable<string> RenderAttributes(IEnumerable<object> attributes, bool addAuthorizeAttribute = true)
+{
+    var sb = new StringBuilder();
+
+    foreach (var attribute in attributes)
+    {
+        sb.Clear();
+
+        if (attribute is Solstice.CodeGenerationAuthorizeAttribute authorizeAttribute)
+        {
+			addAuthorizeAttribute = false;
+
+            var users = authorizeAttribute.Users ?? new string[0];
+            var roles = authorizeAttribute.Roles ?? new string[0];
+            var hasData = users.Any() || roles.Any();
+
+            sb.Append("[Authorize");
+
+            if (hasData)
+            {
+                sb.Append('(');
+            }
+
+            if (users.Any())
+            {
+                sb.Append("Users = \"").Append(string.Join(",", users)).Append('\"');
+            }
+
+            if (roles.Any())
+            {
+                if (users.Any())
+                {
+                    sb.Append(", ");
+                }
+
+                sb.Append("Roles = \"").Append(string.Join(",", roles)).Append('\"');
+            }
+
+            if (hasData)
+            {
+                sb.Append(')');
+            }
+
+            sb.Append(']');
+
+            yield return sb.ToString();
+        }
+		else if (attribute is Solstice.CodeGenerationAllowAnonymousAttribute)
+		{
+			addAuthorizeAttribute = false;
+
+			yield return "[AllowAnonymous]";
+		}
+    }
+
+	if (addAuthorizeAttribute)
+	{
+		yield return "[Authorize]";
+	}
+}
+
+static HashSet<Type> primitiveTypes = new HashSet<Type>
+{
+	typeof(string),
+
+	typeof(DateTime),
+	typeof(DateTimeOffset),
+
+	typeof(Int16),
+	typeof(Int32),
+	typeof(Int64),
+	typeof(UInt16),
+	typeof(UInt32),
+	typeof(UInt64),
+
+	typeof(Single),
+	typeof(Double),
+	typeof(Decimal)
+};
+
+private bool IsGetMethod(MethodInfo method)
+{
+	var parameters = method.GetParameters();
+	//var isGetMethod = parameters.All(i => primitiveTypes.Contains(i.ParameterType) || i.ParameterType.IsEnum);
+	var isGetMethod = false;
+	
+	if (!isGetMethod && parameters.Length > 1)
+	{
+		throw new Exception($"The method {method.Name} cannot have more than one complex type as parameter.");
+	}
+
+	return isGetMethod;
+}
+
+private string GetMethodName(MethodInfo method)
+{
+	if (method.Name.EndsWith("Async") && IsAsyncMethod(method))
+	{
+		return method.Name.Substring(0, method.Name.Length - 5);
+	}
+	else
+	{
+		return method.Name;
+	}
+}
+
+private bool IsAsyncMethod(MethodInfo method)
+{
+	var type = method.ReturnType;
+	
+	if (type.IsGenericType)
+	{
+		type = type.BaseType;
+	}
+	
+	return type == typeof(System.Threading.Tasks.Task);
+}
+
+private IEnumerable<MethodInfo> GetPublicMethods(Type type)
+{
+    foreach (var m in type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly))
+    {
+		var skip =
+			m.IsSpecialName ||
+			m.GetCustomAttributes(typeof(Solstice.CodeGenerationDisabledAttribute), true).Length > 0;
+
+        if (skip)
+        {
+            continue;
+        }
+
+        yield return m;
+    }
+
+    foreach (var t in type.GetInterfaces())
+    {
+        foreach (var m in GetPublicMethods(t))
+        {
+            yield return m;
+        }
+    }
+}
+#>

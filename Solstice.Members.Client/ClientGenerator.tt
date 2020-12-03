@@ -1,0 +1,2 @@
+﻿<#@ assembly name="$(TargetDir)\Solstice.Core.Models.dll"#>
+<#@ include file="$(ProjectDir)\ClientGeneratorBase.tt" #>

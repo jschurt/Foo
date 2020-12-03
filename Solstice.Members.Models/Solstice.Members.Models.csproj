@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>Solstice</RootNamespace>
+    <Authors>Solstice Benefits Inc</Authors>
+    <Description>Members domain models.</Description>
+    <Version>1.18.2</Version>
+    <Configurations>Debug;Release</Configurations>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Solstice.Core.Models" Version="1.2.0" />
+    <PackageReference Include="Solstice.Infrastructure.Core" Version="2.1.0" />
+  </ItemGroup>
+
+</Project>
