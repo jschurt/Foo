@@ -6,5 +6,6 @@ namespace Solstice.Members.Tests
 {
     class Class1
     {
+        //Adding code here
     }
 }
